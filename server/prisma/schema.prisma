@@ -1,0 +1,48 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id          Int          @id @default(autoincrement())
+  email       String       @unique
+  password    String
+  role        Role         @default(USER)
+  createdAt   DateTime     @default(now())
+  playgrounds Playground[] // Relation with Playground
+}
+
+model Playground {
+  id                 String          @id @unique
+  name               String
+  language           Language // The language selected by the user (enum)
+  userId             Int
+  user               User            @relation(fields: [userId], references: [id])
+  lastModified       DateTime
+  activeContainerId  String? // Store the Docker container ID
+  containerStatus    ContainerStatus @default(STOPPED)
+  containerStartedAt DateTime? // When the container was last started
+  containerPort      Int?
+  createdAt          DateTime        @default(now())
+}
+
+enum ContainerStatus {
+  STOPPED
+  RUNNING
+  ERROR
+}
+
+enum Language {
+  PYTHON
+  NODEJS
+  CPP
+}
+
+enum Role {
+  USER
+  ADMIN
+}
