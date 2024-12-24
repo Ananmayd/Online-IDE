@@ -1,5 +1,16 @@
 # Online IDE
 
-- do npm install
-- go to server folder and do npm start
-- go to frontend folder do npm run dev
+This project is an Online IDE with a server and frontend setup. Follow the steps below to get the project running.
+
+## Installation
+
+1. **Install Dependencies**:
+   Navigate to the project root directory and run:
+   ```bash
+   npm install
+
+   cd server
+   npm start
+
+   cd frontend
+   npm run dev
