@@ -8,24 +8,19 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.stopPlayground = exports.startPlayground = exports.createUserPlayground = exports.getUserPlayground = exports.getPlaygrounds = void 0;
+exports.stopPlayground = exports.startPlayground = exports.createUserPlayground = exports.getPlaygrounds = void 0;
 const client_1 = require("@prisma/client");
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
 const crypto_1 = require("crypto");
 const playgroundServices_1 = require("../services/playgroundServices");
 const dockerServices_1 = require("../services/dockerServices");
 const prisma = new client_1.PrismaClient();
-const playgroundsBaseDir = path_1.default.join(__dirname, "../../../user-Playgrounds");
 const getPlaygrounds = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
     try {
         // console.log(req.user);
         const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id; // Get the user ID from the request
+        console.log("userId: ", userId);
         if (!userId) {
             res.status(400).json({ error: "User not authenticated" });
             return;
@@ -44,38 +39,6 @@ const getPlaygrounds = (req, res) => __awaiter(void 0, void 0, void 0, function*
     }
 });
 exports.getPlaygrounds = getPlaygrounds;
-const getUserPlayground = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
-    try {
-        const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id; // Get the user ID from the request
-        const id = req.params.id; // Get the playground ID from the route parameters
-        if (!userId) {
-            res.status(400).json({ error: "User not authenticated" });
-            return;
-        }
-        const playgroundDir = path_1.default.join(playgroundsBaseDir, `user_${userId}`, `playground_${id}`);
-        // Check if the playground directory exists
-        if (!fs_1.default.existsSync(playgroundDir)) {
-            res.status(404).json({ error: "Playground not found" });
-            return;
-        }
-        // Read all files in the playground directory
-        const files = fs_1.default.readdirSync(playgroundDir);
-        const playgroundFiles = {};
-        for (const file of files) {
-            const filePath = path_1.default.join(playgroundDir, file);
-            // Read the file contents
-            const content = fs_1.default.readFileSync(filePath, "utf-8");
-            playgroundFiles[file] = content; // Store file contents
-        }
-        res.status(200).json(playgroundFiles);
-    }
-    catch (error) {
-        console.error("Error retrieving playground:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
-});
-exports.getUserPlayground = getUserPlayground;
 // Create a new playground for a user
 const createUserPlayground = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     var _a;
@@ -102,9 +65,7 @@ const createUserPlayground = (req, res) => __awaiter(void 0, void 0, void 0, fun
                 },
             },
         });
-        res
-            .status(201)
-            .json({
+        res.status(201).json({
             success: true,
             message: "Playground created successfully!",
             id: id,
@@ -117,30 +78,44 @@ const createUserPlayground = (req, res) => __awaiter(void 0, void 0, void 0, fun
 });
 exports.createUserPlayground = createUserPlayground;
 const startPlayground = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
-    const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id; // From your authentication middleware
     const { id } = req.params;
-    // console.log("This is the id ", id);
     try {
-        // Fetch playground details to get the language
         const playground = yield prisma.playground.findUnique({
-            where: { id: id, userId }, // Add userId to ensure user owns the playground
+            where: { id: id },
         });
+        const userId = yield prisma.playground.findUnique({
+            where: { id: id },
+            select: {
+                userId: true,
+            },
+        });
+        // console.log("userId: ",userId?.userId);
+        if (!userId) {
+            res.status(404).json({ message: "User not found" });
+            return;
+        }
+        console.log("playground: ", playground === null || playground === void 0 ? void 0 : playground.containerStatus);
         if (!playground) {
             res.status(404).json({ message: "Playground not found" });
             return;
         }
-        // Check if a container is already running
-        if (playground.containerStatus === "RUNNING") {
-            res.status(400).json({ message: "Playground container already running" });
-            return;
-        }
-        // Dynamically assign a port (you might want a more sophisticated port management)
+        console.log("Reached Checkpoint ", playground.containerStatus);
+        // if (playground.containerStatus === "RUNNING") {
+        //   console.log("Already running");
+        //     res.status(400).json({ message: "Playground container already running" });
+        //     return;
+        //   }
         const containerPort = Math.floor(Math.random() * (65535 - 49152 + 1)) + 49152;
         // Start the Docker container
-        const containerId = yield (0, dockerServices_1.startPlaygroundContainer)(userId.toString(), id, playground.language);
+        // if (playground.containerStatus !== "RUNNING") {
+        const containerId = yield (0, dockerServices_1.startPlaygroundContainer)({
+            userId: userId === null || userId === void 0 ? void 0 : userId.userId,
+            id,
+            language: playground.language,
+        });
+        console.log("conatinerID: ", containerId);
         // Update playground with container details
-        const updatedPlayground = yield prisma.playground.update({
+        yield prisma.playground.update({
             where: { id: id },
             data: {
                 activeContainerId: containerId,
@@ -154,10 +129,10 @@ const startPlayground = (req, res) => __awaiter(void 0, void 0, void 0, function
             containerId,
             port: containerPort,
         });
+        // }
     }
     catch (error) {
         console.error("Error starting playground container:", error);
-        // Optionally update playground status to ERROR
         if (id) {
             yield prisma.playground.update({
                 where: { id: id },
@@ -171,37 +146,26 @@ const startPlayground = (req, res) => __awaiter(void 0, void 0, void 0, function
 });
 exports.startPlayground = startPlayground;
 const stopPlayground = (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    var _a;
-    const userId = (_a = req.user) === null || _a === void 0 ? void 0 : _a.id;
     const { id } = req.params;
     try {
-        // Fetch the playground with comprehensive checks
         const playground = yield prisma.playground.findUnique({
             where: {
                 id: id,
-                userId: userId,
             },
         });
-        // Validate playground existence and ownership
         if (!playground) {
             res.status(404).json({ message: "Playground not found or unauthorized" });
             return;
         }
-        // Check if there's an active container to stop
+        console.log("Stoping conatiner: ", playground.containerStatus);
         if (!playground.activeContainerId ||
             playground.containerStatus !== "RUNNING") {
             res.status(400).json({ message: "No active container to stop" });
             return;
         }
-        try {
-            // Stop the Docker container
-            yield (0, dockerServices_1.stopPlaygroundContainer)(playground.activeContainerId);
-        }
-        catch (containerStopError) {
-            // Log the error but continue with status update
-            console.error("Error stopping Docker container:", containerStopError);
-        }
-        // Update playground to reflect stopped status
+        // Stop the Docker container
+        yield (0, dockerServices_1.stopPlaygroundContainer)(playground.activeContainerId);
+        // Update playground status
         const updatedPlayground = yield prisma.playground.update({
             where: { id: id },
             data: {
@@ -211,14 +175,14 @@ const stopPlayground = (req, res) => __awaiter(void 0, void 0, void 0, function*
                 containerPort: null,
             },
         });
+        console.log("Reached checkpoint 2", playground.containerStatus);
         res.json({
             message: "Playground container stopped successfully",
             id: updatedPlayground.id,
         });
     }
     catch (error) {
-        console.error("Comprehensive error stopping playground container:", error);
-        // Attempt to update playground status to error state
+        console.error("Error stopping playground container:", error);
         try {
             yield prisma.playground.update({
                 where: { id: id },

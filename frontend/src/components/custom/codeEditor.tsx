@@ -3,9 +3,10 @@ import React from 'react';
 interface CodeEditorProps {
   content: string;
   onChange: (value: string) => void;
+  // socket: any;
 }
 
-export const CodeEditor: React.FC<CodeEditorProps> = ({ content, onChange }) => {
+export const CodeEditor: React.FC<CodeEditorProps> = ({ content, onChange}) => {
   return (
     <div className="h-full flex flex-col">
       <div className="p-2 bg-gray-800 text-white text-sm">

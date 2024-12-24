@@ -1,16 +1,17 @@
+import { Role } from '@prisma/client';
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 
-interface JwtPayload {
+interface CustomJwtPayload {
   id: number;
-  role: string;
+  role: Role;
 }
 
 export const verifyToken = (req: Request, res: Response, next: NextFunction): void => {
   
   const token = req.header('Authorization')?.replace('Bearer ', '');
 
-  console.log('token :', token);
+  // console.log('token :', token);
 
   if (!token) {
     res.status(401).json({ error: 'Access denied' });
@@ -18,7 +19,7 @@ export const verifyToken = (req: Request, res: Response, next: NextFunction): vo
   }
 
   try {
-    const verified = jwt.verify(token, process.env.JWT_SECRET as string) as JwtPayload;
+    const verified = jwt.verify(token, process.env.JWT_SECRET as string) as CustomJwtPayload;
     req.user = verified;
     // console.log('verified', verified);
     next();

@@ -1,92 +1,88 @@
+import { Language } from "@prisma/client";
 import Docker from "dockerode";
 import path from "path";
-import * as stream from 'stream';
 
 const docker = new Docker();
 
-export const startPlaygroundContainer = async (
-  userId: string,
-  id: string,
-  language: string
-) => {
+interface ContainerConfig {
+  userId: number;
+  id: string;
+  language: Language;
+}
+
+export const startPlaygroundContainer = async ({
+  userId,
+  id,
+  language,
+}: ContainerConfig) => {
   const playgroundPath = path.resolve(
     __dirname,
     "../../../user-Playgrounds",
     `user_${userId}`,
     `playground_${id}`
   );
-  const imageName =
-    language === "PYTHON"
-      ? "python:3.10"
-      : language === "NODEJS"
-      ? "node:16"
-      : "gcc"; // example images
-  console.log(`Starting container for user ${userId} in language ${language}`);
+
+  const imageConfig = {
+    PYTHON: { image: "python:3.10-slim", shell: "python3" },
+    NODEJS: { image: "node:16-slim", shell: "node" },
+    CPP: { image: "gcc:latest", shell: "bash" },
+  };
+
+  const config = imageConfig[language as keyof typeof imageConfig];
+  if (!config) throw new Error("Unsupported language");
+
   try {
-    await new Promise((resolve, reject) => {
-      docker.pull(imageName, (err: any, pullStream: any) => {
-        if (err) {
-          console.error(`Failed to start pull for ${imageName}:`, err);
-          reject(err);
-          return;
-        }
-
-        // Create a progress stream
-        pullStream.pipe(
-          new stream.Writable({
-            write(chunk, encoding, callback) {
-              console.log(`Pulling ${imageName}: ${chunk.toString()}`);
-              callback();
-            }
-          })
-        );
-
-        docker.modem.followProgress(pullStream, 
-          (err) => {
-            if (err) {
-              console.error(`Pull error for ${imageName}:`, err);
-              reject(err);
-            } else {
-              console.log(`Successfully pulled ${imageName}`);
-              resolve(null);
-            }
-          }
-        );
-      });
-    });
+    await pullImage(config.image);
 
     const container = await docker.createContainer({
-      Image: imageName,
-      Cmd: [language === "PYTHON" ? "python3" : language === "NODEJS" ? "node" : "gcc", "-i"], // Interactive mode
+      Image: config.image,
+      Cmd: [config.shell],
       Tty: true,
       AttachStdin: true,
       AttachStdout: true,
       AttachStderr: true,
       OpenStdin: true,
       HostConfig: {
-        Binds: [`${playgroundPath}:/workspace`], // Mount playground to /workspace
+        SecurityOpt: ["no-new-privileges"],
+        CapDrop: ["ALL"],
+        NetworkMode: "none",
+        Binds: [`${playgroundPath}:/workspace:ro`],
+        ReadonlyRootfs: true,
       },
-      WorkingDir: "/workspace", // Working directory inside container
+      WorkingDir: "/workspace",
+      User: "nobody",
     });
 
     await container.start();
-    console.log(`Container started for user ${userId} in language ${language}`);
-
-    return container.id; // Return the container ID if you want to manage it later
+    return container.id;
   } catch (error) {
     console.error("Error starting container:", error);
     throw new Error("Failed to start playground container");
   }
 };
 
+async function pullImage(imageName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    docker.pull(imageName, (err: any, stream: any) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      docker.modem.followProgress(stream, (err) =>
+        err ? reject(err) : resolve()
+      );
+    });
+  });
+}
+
 export const stopPlaygroundContainer = async (
   containerId: string
 ): Promise<void> => {
   try {
     const container = docker.getContainer(containerId);
-    await container.stop();
-    await container.remove(); // Optional: remove the container to free up resources
-    console.log(`Container ${containerId} stopped and removed.`);
+    await container.stop({ t: 5 });
+    await container.remove({ force: true });
   } catch (error) {
     console.error("Error stopping container:", error);
     throw new Error("Failed to stop playground container");

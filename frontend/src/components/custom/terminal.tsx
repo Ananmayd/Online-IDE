@@ -2,15 +2,18 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import {FitAddon} from '@xterm/addon-fit';
 import { useEffect, useRef, useState } from "react";
 import '@xterm/xterm/css/xterm.css';
-import socket from "../../socket";
+
 
 interface TerminalProps {
-  userId: string;
   playgroundId: string;
-  language: "PYTHON" | "NODEJS" | "C";
+  language: "PYTHON" | "NODEJS" | "CPP";
+  socket: any;
+  containerId: string;
 }
 
-const Terminal = ({ userId, playgroundId, language }: TerminalProps) => {
+const Terminal = ({ playgroundId, language, socket, containerId }: TerminalProps) => {
+
+
   const terminalRef = useRef<HTMLDivElement>(null);
   const terminalInstance = useRef<XTerminal | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -35,21 +38,15 @@ const Terminal = ({ userId, playgroundId, language }: TerminalProps) => {
     fitAddon.fit();
     terminalInstance.current = term;
 
-    // Start terminal session
-    socket.emit('start-terminal', {
-      userId,
-      playgroundId,
-      language
-    });
-
     // Terminal ready event
-    socket.on('terminal:ready', (containerId) => {
+    socket.on('terminal:ready', (containerId: string) => {
       setIsConnected(true);
-      term.write(`\r\n🚀 Connected to ${language} environment\r\n`);
+      term.write(`\r\n🚀 Connected to ${language} environment and ${containerId}\r\n`);
     });
 
     // Handle terminal input
     term.onData((data) => {
+      // console.log('Data:', data);
       if (isConnected) {
         socket.emit('terminal:write', data);
       }
@@ -66,6 +63,9 @@ const Terminal = ({ userId, playgroundId, language }: TerminalProps) => {
       setIsConnected(false);
     });
 
+    // Attach to container
+    socket.emit("terminal:attach", containerId);
+
     // Handle window resize
     const handleResize = () => {
       fitAddon.fit();
@@ -80,7 +80,7 @@ const Terminal = ({ userId, playgroundId, language }: TerminalProps) => {
       socket.off('terminal:error');
       term.dispose();
     };
-  }, [userId, playgroundId, language]);
+  }, [playgroundId, language]);
 
   return (
     <div 

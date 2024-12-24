@@ -1,14 +1,16 @@
 import { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
-import fs from "fs";
-import path from "path";
 import { randomBytes } from "crypto";
 import { createPlaygroundFromTemplate } from "../services/playgroundServices";
-import { startPlaygroundContainer, stopPlaygroundContainer } from "../services/dockerServices";
+import {
+  startPlaygroundContainer,
+  stopPlaygroundContainer,
+} from "../services/dockerServices";
+import { socketObj } from "../app";
 
 const prisma = new PrismaClient();
 
-const playgroundsBaseDir = path.join(__dirname, "../../../user-Playgrounds");
+
 
 export const getPlaygrounds = async (
   req: Request,
@@ -17,6 +19,7 @@ export const getPlaygrounds = async (
   try {
     // console.log(req.user);
     const userId = req.user?.id; // Get the user ID from the request
+    console.log("userId: ", userId);
 
     if (!userId) {
       res.status(400).json({ error: "User not authenticated" });
@@ -37,48 +40,6 @@ export const getPlaygrounds = async (
   }
 };
 
-export const getUserPlayground = async (
-  req: Request,
-  res: Response
-): Promise<void> => {
-  try {
-    const userId = req.user?.id; // Get the user ID from the request
-    const id = req.params.id; // Get the playground ID from the route parameters
-
-    if (!userId) {
-      res.status(400).json({ error: "User not authenticated" });
-      return;
-    }
-
-    const playgroundDir = path.join(
-      playgroundsBaseDir,
-      `user_${userId}`,
-      `playground_${id}`
-    );
-
-    // Check if the playground directory exists
-    if (!fs.existsSync(playgroundDir)) {
-      res.status(404).json({ error: "Playground not found" });
-      return;
-    }
-
-    // Read all files in the playground directory
-    const files = fs.readdirSync(playgroundDir);
-    const playgroundFiles: any = {};
-
-    for (const file of files) {
-      const filePath = path.join(playgroundDir, file);
-      // Read the file contents
-      const content = fs.readFileSync(filePath, "utf-8");
-      playgroundFiles[file] = content; // Store file contents
-    }
-
-    res.status(200).json(playgroundFiles);
-  } catch (error) {
-    console.error("Error retrieving playground:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-};
 
 // Create a new playground for a user
 export const createUserPlayground = async (
@@ -114,13 +75,11 @@ export const createUserPlayground = async (
       },
     });
 
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: "Playground created successfully!",
-        id: id,
-      });
+    res.status(201).json({
+      success: true,
+      message: "Playground created successfully!",
+      id: id,
+    });
   } catch (error) {
     console.error("Error creating playground:", error);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -131,59 +90,73 @@ export const startPlayground = async (
   req: Request,
   res: Response
 ): Promise<void> => {
-  
-  const userId = req.user?.id; // From your authentication middleware
   const { id } = req.params;
-  // console.log("This is the id ", id);
-  
+
   try {
-    // Fetch playground details to get the language
     const playground = await prisma.playground.findUnique({
-      where: { id: id, userId }, // Add userId to ensure user owns the playground
+      where: { id: id },
     });
+
+    const userId = await prisma.playground.findUnique({
+      where: { id: id },
+      select: {
+        userId: true,
+      },
+    });
+    // console.log("userId: ",userId?.userId);
+
+    if (!userId) {
+      res.status(404).json({ message: "User not found" });
+      return;
+    }
+
+    console.log("playground: ", playground?.containerStatus);
 
     if (!playground) {
       res.status(404).json({ message: "Playground not found" });
       return;
     }
+    console.log("Reached Checkpoint ", playground.containerStatus);
 
-    // Check if a container is already running
-    if (playground.containerStatus === "RUNNING") {
-      res.status(400).json({ message: "Playground container already running" });
-      return;
-    }
+    // if (playground.containerStatus === "RUNNING") {
+    //   console.log("Already running");
+    //     res.status(400).json({ message: "Playground container already running" });
+    //     return;
+    //   }
 
-    // Dynamically assign a port (you might want a more sophisticated port management)
     const containerPort =
       Math.floor(Math.random() * (65535 - 49152 + 1)) + 49152;
-
     // Start the Docker container
-    const containerId = await startPlaygroundContainer(
-      userId.toString(),
-      id,
-      playground.language
-    );
+    // if (playground.containerStatus !== "RUNNING") {
+      const containerId = await startPlaygroundContainer({
+        userId: userId?.userId,
+        id,
+        language: playground.language,
+      });
+      console.log("conatinerID: ", containerId);
 
-    // Update playground with container details
-    const updatedPlayground = await prisma.playground.update({
-      where: { id: id },
-      data: {
-        activeContainerId: containerId,
-        containerStatus: "RUNNING",
-        containerStartedAt: new Date(),
-        containerPort: containerPort,
-      },
-    });
+      // Update playground with container details
+      await prisma.playground.update({
+        where: { id: id },
+        data: {
+          activeContainerId: containerId,
+          containerStatus: "RUNNING",
+          containerStartedAt: new Date(),
+          containerPort: containerPort,
+        },
+      });
 
-    res.json({
-      message: "Playground container started",
-      containerId,
-      port: containerPort,
-    });
+
+      
+      res.json({
+        message: "Playground container started",
+        containerId,
+        port: containerPort,
+      });
+    // }
   } catch (error) {
     console.error("Error starting playground container:", error);
 
-    // Optionally update playground status to ERROR
     if (id) {
       await prisma.playground.update({
         where: { id: id },
@@ -201,25 +174,21 @@ export const stopPlayground = async (
   req: Request,
   res: Response
 ): Promise<void> => {
-  const userId = req.user?.id;
   const { id } = req.params;
 
   try {
-    // Fetch the playground with comprehensive checks
     const playground = await prisma.playground.findUnique({
       where: {
         id: id,
-        userId: userId,
       },
     });
 
-    // Validate playground existence and ownership
     if (!playground) {
       res.status(404).json({ message: "Playground not found or unauthorized" });
       return;
     }
+    console.log("Stoping conatiner: ", playground.containerStatus);
 
-    // Check if there's an active container to stop
     if (
       !playground.activeContainerId ||
       playground.containerStatus !== "RUNNING"
@@ -228,15 +197,10 @@ export const stopPlayground = async (
       return;
     }
 
-    try {
-      // Stop the Docker container
-      await stopPlaygroundContainer(playground.activeContainerId);
-    } catch (containerStopError) {
-      // Log the error but continue with status update
-      console.error("Error stopping Docker container:", containerStopError);
-    }
+    // Stop the Docker container
+    await stopPlaygroundContainer(playground.activeContainerId);
 
-    // Update playground to reflect stopped status
+    // Update playground status
     const updatedPlayground = await prisma.playground.update({
       where: { id: id },
       data: {
@@ -247,14 +211,15 @@ export const stopPlayground = async (
       },
     });
 
+    console.log("Reached checkpoint 2", playground.containerStatus);
+
     res.json({
       message: "Playground container stopped successfully",
       id: updatedPlayground.id,
     });
   } catch (error) {
-    console.error("Comprehensive error stopping playground container:", error);
+    console.error("Error stopping playground container:", error);
 
-    // Attempt to update playground status to error state
     try {
       await prisma.playground.update({
         where: { id: id },

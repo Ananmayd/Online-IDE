@@ -3,7 +3,7 @@ import path from "path";
 
 const templatesDir = path.join(__dirname, "../../../templates");
 
-export const createPlaygroundFromTemplate = async (userId: string, playgroundId: string, language: string) => {
+export const createPlaygroundFromTemplate = async (userId: number, playgroundId: string, language: string) => {
   const userPlaygroundDir = path.join(__dirname, "../../../user-Playgrounds", `user_${userId}`, `playground_${playgroundId}`);
   
   // Ensure the user's playground directory exists

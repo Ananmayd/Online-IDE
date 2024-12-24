@@ -9,11 +9,16 @@ interface FileNode {
 }
 
 interface FileExplorerProps {
-  files: FileNode[];
+  files?: FileNode[];
   onFileSelect: (path: string) => void;
 }
 
-const FileTreeNode: React.FC<{ node: FileNode; level: number; path: string; onFileSelect: (path: string) => void }> = ({
+const FileTreeNode: React.FC<{ 
+  node: FileNode; 
+  level: number; 
+  path: string; 
+  onFileSelect: (path: string) => void 
+}> = ({
   node,
   level,
   path,
@@ -33,7 +38,7 @@ const FileTreeNode: React.FC<{ node: FileNode; level: number; path: string; onFi
   return (
     <div className="select-none">
       <div
-        className="flex items-center hover:bg-gray-100 py-1 px-2 cursor-pointer"
+        className="flex items-center hover:bg-gray-500 py-1 px-2 cursor-pointer"
         style={{ paddingLeft: `${level * 12}px` }}
         onClick={handleClick}
       >
@@ -51,9 +56,9 @@ const FileTreeNode: React.FC<{ node: FileNode; level: number; path: string; onFi
       </div>
       {node.type === 'folder' && isOpen && node.children && (
         <div>
-          {node.children.map((child, index) => (
+          {node.children.map((child: FileNode, index: number) => (
             <FileTreeNode
-              key={index}
+              key={`${fullPath}-${child.name}-${index}`}
               node={child}
               level={level + 1}
               path={fullPath}
@@ -66,15 +71,34 @@ const FileTreeNode: React.FC<{ node: FileNode; level: number; path: string; onFi
   );
 };
 
-export const FileExplorer: React.FC<FileExplorerProps> = ({ files, onFileSelect }) => {
+export const FileExplorer: React.FC<FileExplorerProps> = ({ files = [], onFileSelect }) => {
+  if (!files || files.length === 0) {
+    return (
+      <div className="h-full bg-gray-900 border-r border-gray-500">
+        <div className="p-2 border-b border-gray-200">
+          <h2 className="text-sm font-semibold text-white">Explorer</h2>
+        </div>
+        <div className="p-4 text-gray-400 text-sm">
+          No files available
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full bg-gray-900 border-r border-gray-500">
       <div className="p-2 border-b border-gray-200">
         <h2 className="text-sm font-semibold text-white">Explorer</h2>
       </div>
       <div className="overflow-auto text-white">
-        {files.map((file, index) => (
-          <FileTreeNode key={index} node={file} level={0} path="" onFileSelect={onFileSelect} />
+        {files.map((file: FileNode, index: number) => (
+          <FileTreeNode 
+            key={`root-${file.name}-${index}`} 
+            node={file} 
+            level={0} 
+            path="" 
+            onFileSelect={onFileSelect} 
+          />
         ))}
       </div>
     </div>

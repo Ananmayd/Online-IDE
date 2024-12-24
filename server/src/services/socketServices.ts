@@ -1,112 +1,146 @@
-import { Server as SocketServer, Socket } from 'socket.io';
-import Docker from 'dockerode';
-import { startPlaygroundContainer, stopPlaygroundContainer } from './dockerServices';
+import { Server as SocketServer, Socket } from "socket.io";
+import * as pty from "node-pty";
+
+interface PTYSession {
+  containerId: string;
+  ptyProcess: pty.IPty;
+  lastAccessed: number;
+}
 
 class SocketService {
   private io: SocketServer;
-  private activeSessions: Map<string, { containerId: string; stream: any }>;
-  private docker: Docker;
+  private activeSessions: Map<string, PTYSession>;
+  private readonly SESSION_TIMEOUT = 3600000; // 1 hour
 
   constructor(io: SocketServer) {
     this.io = io;
     this.activeSessions = new Map();
-    this.docker = new Docker();
     this.initialize();
   }
 
   private initialize(): void {
-    this.io.on('connection', this.handleConnection.bind(this));
+    this.io.on("connection", this.handleConnection.bind(this));
+    this.setupCleanupInterval();
+  }
+
+  private setupCleanupInterval(): void {
+    setInterval(() => this.cleanupInactiveSessions(), 300000);
+  }
+
+  private async cleanupInactiveSessions(): Promise<void> {
+    for (const [socketId, session] of this.activeSessions) {
+      if (Date.now() - session.lastAccessed > this.SESSION_TIMEOUT) {
+        await this.cleanupSession(socketId);
+      }
+    }
   }
 
   private async handleConnection(socket: Socket): Promise<void> {
-    console.log('Client connected:', socket.id);
+    console.log("Client connected:", socket.id);
 
-    socket.on('start-terminal', async (data) => {
-      await this.handleStartTerminal(socket, data);
+    socket.on('terminal:attach', async (containerId: string) => {
+      try {
+        console.log('Attaching to container:', containerId);
+          await this.attachToContainer(socket, containerId);
+        } catch (error) {
+          console.error('Failed to attach to container:', error);
+          socket.emit('terminal:error', 'Failed to attach to container');
+        }
+      });
+
+    socket.on("terminal:resize", ({ cols, rows }) => {
+      try {
+        const session = this.activeSessions.get(socket.id);
+        if (session?.ptyProcess) {
+          session.ptyProcess.resize(cols, rows);
+        }
+      } catch (error) {
+        console.error("Resize error:", error);
+      }
     });
 
-    socket.on('terminal:write', (data) => {
-      this.handleTerminalWrite(socket, data);
+    socket.on("terminal:write", (data) => {
+      try {
+        this.handleTerminalWrite(socket, data);
+      } catch (error) {
+        socket.emit("terminal:error", "Failed to write to terminal");
+      }
     });
 
-    socket.on('disconnect', () => {
+    socket.on("disconnect", () => {
       this.handleDisconnect(socket);
     });
   }
 
-  private async handleStartTerminal(
-    socket: Socket, 
-    { userId, playgroundId, language }: { 
-      userId: string; 
-      playgroundId: string; 
-      language: string;
-    }
+  public async attachToContainer(
+    socket: Socket,
+    containerId: string,
+    cols: number = 80,
+    rows: number = 24
   ): Promise<void> {
     try {
-      const containerId = await startPlaygroundContainer(
-        userId,
-        playgroundId,
-        language
+      const ptyProcess = pty.spawn(
+        "docker",
+        ["exec", "-it", containerId, "/bin/bash"],
+        {
+          name: "xterm-color",
+          cols: cols,
+          rows: rows,
+          env: process.env,
+        }
       );
-      
-      const container = this.docker.getContainer(containerId);
-
-      const exec = await container.exec({
-        Cmd: [language === "PYTHON" ? "/bin/bash" : 
-              language === "NODEJS" ? "/bin/bash" : "/bin/bash"],
-        AttachStdin: true,
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: true,
-        WorkingDir: "/workspace"
-      });
-
-      const stream = await exec.start({
-        hijack: true,
-        stdin: true
-      });
 
       this.activeSessions.set(socket.id, {
         containerId,
-        stream
+        ptyProcess,
+        lastAccessed: Date.now(),
       });
 
-      // Handle terminal output
-      stream.on('data', (data: Buffer) => {
-        socket.emit('terminal:data', data.toString());
+      // Handle PTY output
+      ptyProcess.onData((data: string) => {
+        socket.emit("terminal:data", data);
       });
 
-      stream.on('error', (error: Error) => {
-        console.error('Stream error:', error);
-        socket.emit('terminal:error', 'Terminal error occurred');
+      // Handle PTY exit
+      ptyProcess.onExit(({ exitCode, signal }) => {
+        console.log(
+          `PTY process exited with code ${exitCode} and signal ${signal}`
+        );
+        this.cleanupSession(socket.id);
       });
 
-      socket.emit('terminal:ready', containerId);
-
+      socket.emit("terminal:ready", containerId);
     } catch (error) {
-      console.error('Failed to start terminal:', error);
-      socket.emit('terminal:error', 'Failed to start terminal');
+      console.error("Failed to attach to container:", error);
+      throw error;
     }
   }
 
   private handleTerminalWrite(socket: Socket, data: string): void {
     const session = this.activeSessions.get(socket.id);
-    if (session && session.stream.writable) {
-      session.stream.write(data);
+    if (session?.ptyProcess) {
+      session.ptyProcess.write(data);
+      session.lastAccessed = Date.now();
+    }
+  }
+
+  private async cleanupSession(socketId: string): Promise<void> {
+    const session = this.activeSessions.get(socketId);
+    if (session) {
+      try {
+        if (session.ptyProcess) {
+          session.ptyProcess.kill();
+        }
+        this.activeSessions.delete(socketId);
+        console.log(`Session for socket ${socketId} cleaned up successfully.`);
+      } catch (error) {
+        console.error("Error cleaning up session:", error);
+      }
     }
   }
 
   private async handleDisconnect(socket: Socket): Promise<void> {
-    const session = this.activeSessions.get(socket.id);
-    if (session) {
-      try {
-        await stopPlaygroundContainer(session.containerId);
-        this.activeSessions.delete(socket.id);
-        console.log(`Cleaned up session for socket ${socket.id}`);
-      } catch (error) {
-        console.error('Error cleaning up session:', error);
-      }
-    }
+    await this.cleanupSession(socket.id);
   }
 }
 
